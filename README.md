@@ -41,6 +41,7 @@ Escríbelos tú mismo en cualquier chat. Lo más cómodo es usar tu chat contigo
 | `!s <link>` | Sticker animado (sin sonido) de un TikTok |
 | `!ss` respondiendo a una **imagen o sticker** | El bot te pide el audio: manda un audio, nota de voz o link de TikTok (usa su sonido) |
 | `!ss` respondiendo a un **audio** | El bot te pide la imagen, sticker o video |
+| `!ss <opciones>` respondiendo a un **sticker con sonido** | Lo rehace con su propio sonido y las opciones, p. ej. `!ss ardilla eco` o `!ss 0-3 bass`. Sin opciones te pide un audio nuevo (para cambiarle el sonido) |
 | `!expropiar Paquete\|Autor` | Responde a un sticker (con o sin sonido) → te lo devuelve con tu nombre de paquete y autor. Sin texto usa los de la configuración |
 | `!video <link>` | Descarga el video (TikTok, Instagram, X, YouTube…) y te lo manda |
 | `!mp3 <link>` | Descarga solo el audio en mp3 (también `!musica`) |

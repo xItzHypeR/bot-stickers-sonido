@@ -26,6 +26,7 @@ const MENU = `*🤖 Bot de stickers*
   • Responde a un *link* con ${p}ss, o escribe ${p}ss <link>.
   • Responde a una *imagen o sticker* con ${p}ss y luego manda el *audio, nota de voz o link*.
   • O al revés: responde a un *audio* con ${p}ss y luego manda la imagen.
+  • Responde a un *sticker con sonido* con ${p}ss y efectos (ej. ${p}ss ardilla eco) → le aplica los efectos a su propio sonido.
   Máximo ${config.maxAudioSeconds} s de audio.
 
 *Opciones* para ${p}s y ${p}ss (en cualquier orden):
@@ -210,9 +211,15 @@ export function createBot(sock, { log, rememberSent, isSentByBot, getSent = () =
 				`Escribe *${config.prefix}menu* para ver cómo funciona.`)
 		}
 
+		// Sticker que ya tiene sonido: con opciones (efectos, rango, redondo...) se rehace con su propio
+		// sonido; sin opciones se pide un audio nuevo, para poder cambiárselo.
+		const ownParts = visualSrc?.kind === 'sticker' ? getSoundStickerParts(quoted) : null
+		const reuseOwnSound = ownParts && visualSrc.node === ownParts.sticker && !audioSrc && hasOptions(job)
+
 		await react(m, '⏳')
 		if (visualSrc) job.visual = { kind: visualSrc.kind, buffer: await download(visualSrc) }
 		if (audioSrc) job.audio = { buffer: await download(audioSrc) }
+		if (reuseOwnSound) job.audio = { buffer: await download({ node: ownParts.audio, dl: 'audio' }) }
 		if (url) await addLinkToJob(job, url)
 
 		// Un video con audio sirve para las dos cosas
@@ -226,7 +233,13 @@ export function createBot(sock, { log, rememberSent, isSentByBot, getSent = () =
 		pending.set(key, job)
 		await react(m, '👍')
 		if (job.visual) {
-			await reply(chat, `🖼️ Listo. Ahora manda el *audio, nota de voz o link* (máx. ${config.maxAudioSeconds} s).\n${config.prefix}cancelar para cancelar.`)
+			let msg = `🖼️ Listo. Ahora manda el *audio, nota de voz o link* (máx. ${config.maxAudioSeconds} s).\n${config.prefix}cancelar para cancelar.`
+			if (ownParts) {
+				msg += `\n\nℹ️ Ese sticker ya tiene sonido: si solo quieres ponerle efectos, ${p}cancelar y respóndele con *${p}ss ardilla* (o el efecto que quieras).`
+			} else if (unverified.has(quoted) && hasOptions(job)) {
+				msg += `\n\nℹ️ ${SOUND_HINT}`
+			}
+			await reply(chat, msg)
 		} else {
 			await reply(chat, `🔊 Listo. Ahora manda la *imagen, sticker, video o link* para el sticker.\n${config.prefix}cancelar para cancelar.`)
 		}
@@ -403,6 +416,11 @@ function isOwner(key) {
 	return [key.participant, key.participantAlt, key.remoteJid, key.remoteJidAlt]
 		.filter(Boolean)
 		.some((jid) => owners.includes(userPart(jid)))
+}
+
+/** ¿Se escribió alguna opción (efectos, rango, inicio, 1:1, redondo)? */
+function hasOptions(opts) {
+	return opts.effects.length > 0 || opts.duration !== null || opts.start > 0 || opts.square || opts.circle
 }
 
 // Cada persona tiene su propio sticker a medias, aunque estén en el mismo grupo
