@@ -35,6 +35,7 @@ function rememberSent(msg) {
 	if (sent.size > 500) sent.delete(sent.keys().next().value)
 }
 const isSentByBot = (id) => sent.has(id)
+const getSent = (id) => sent.get(id)
 
 async function start() {
 	const { state, saveCreds } = await useMultiFileAuthState(config.authFolder)
@@ -85,7 +86,7 @@ async function start() {
 		}
 	})
 
-	createBot(sock, { log, rememberSent, isSentByBot })
+	createBot(sock, { log, rememberSent, isSentByBot, getSent })
 }
 
 start().catch((err) => {

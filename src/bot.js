@@ -43,8 +43,34 @@ const MENU = `*🤖 Bot de stickers*
 *${p}info* — responde a un mensaje para ver cómo viene por dentro
 *${p}cancelar* — cancela un sticker con sonido a medias`
 
-export function createBot(sock, { log, rememberSent, isSentByBot }) {
+export function createBot(sock, { log, rememberSent, isSentByBot, getSent = () => undefined }) {
+	// Stickers vistos, por id de mensaje. Al responder a un sticker, WhatsApp manda una copia
+	// sin el audio; con esto se recupera el sticker con sonido completo.
+	const stickers = new Map()
+	function rememberSticker(m) {
+		const content = normalizeMessageContent(m.message)
+		if (!content?.stickerMessage || !m.key?.id) return
+		stickers.set(m.key.id, content)
+		if (stickers.size > 300) stickers.delete(stickers.keys().next().value)
+	}
+
+	/** El mensaje al que se responde; si es un sticker, el original completo (con su audio) si se conoce. */
+	function resolveQuoted(content) {
+		const quoted = getQuoted(content)
+		if (!quoted?.stickerMessage) return quoted
+		const id = getContextInfo(content)?.stanzaId
+		const original = id && (stickers.get(id) || normalizeMessageContent(getSent(id)))
+		if (original?.stickerMessage) return original
+		// No se vio el original (por ejemplo, llegó antes de prender el bot): puede que le falte el audio
+		unverified.add(quoted)
+		return quoted
+	}
+	const unverified = new WeakSet()
+	const SOUND_HINT = 'Si ese sticker tenía sonido, *reenvíalo a este chat* y vuelve a responderle: ' +
+		'al responder, WhatsApp no le pasa el audio al bot si el sticker llegó antes de prenderlo.'
+
 	sock.ev.on('messages.upsert', ({ messages, type }) => {
+		for (const m of messages) rememberSticker(m)
 		// 'notify' = mensajes nuevos (incluidos los que escribes tú desde el celular).
 		// 'append' = copias de lo que envía el propio bot o mensajes viejos: se ignoran.
 		if (type !== 'notify') return
@@ -79,7 +105,7 @@ export function createBot(sock, { log, rememberSent, isSentByBot }) {
 		const [rawCmd, ...args] = body.split(/\s+/)
 		const rest = body.slice((rawCmd || '').length).trim() // todo lo que va después del comando
 		const cmd = plain(rawCmd || '')
-		const quoted = getQuoted(content)
+		const quoted = resolveQuoted(content)
 
 		try {
 			switch (cmd) {
@@ -301,8 +327,10 @@ export function createBot(sock, { log, rememberSent, isSentByBot }) {
 			rememberSent(await sendSoundSticker(sock, chat, { webp, animated, audio }))
 		} else {
 			rememberSent(await sock.sendMessage(chat, { sticker: webp, isAnimated: animated }))
+			if (unverified.has(quoted)) await reply(chat, `ℹ️ Salió sin sonido. ${SOUND_HINT}`)
 		}
 		await react(m, '✅')
+		log.info(`Sticker expropiado (${parts ? 'con sonido' : 'sin sonido'}): ${meta.packName} / ${meta.author}`)
 	}
 
 	// ---------- !video / !mp3 ----------
@@ -326,7 +354,10 @@ export function createBot(sock, { log, rememberSent, isSentByBot }) {
 	// ---------- !audio ----------
 	async function cmdExtractAudio(m, chat, quoted) {
 		const parts = getSoundStickerParts(quoted)
-		if (!parts) return reply(chat, `Responde con *${config.prefix}audio* a un sticker con sonido.`)
+		if (!parts) {
+			if (unverified.has(quoted)) return reply(chat, `No veo sonido en ese sticker. ${SOUND_HINT}`)
+			return reply(chat, `Responde con *${config.prefix}audio* a un sticker con sonido.`)
+		}
 		await react(m, '⏳')
 		const buffer = await download({ node: parts.audio, dl: 'audio' })
 		rememberSent(await sock.sendMessage(chat, { audio: buffer, mimetype: parts.audio.mimetype || 'audio/ogg; codecs=opus' }))
