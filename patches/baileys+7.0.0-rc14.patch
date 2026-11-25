@@ -1,0 +1,130 @@
+diff --git a/node_modules/baileys/WAProto/index.js b/node_modules/baileys/WAProto/index.js
+index 8950f90..643fb6e 100644
+--- a/node_modules/baileys/WAProto/index.js
++++ b/node_modules/baileys/WAProto/index.js
+@@ -35528,6 +35528,7 @@ export const proto = $root.proto = (() => {
+         Message.prototype.encCommentMessage = null;
+         Message.prototype.bcallMessage = null;
+         Message.prototype.lottieStickerMessage = null;
++        Message.prototype.audioStickerMessage = null;
+         Message.prototype.eventMessage = null;
+         Message.prototype.encEventResponseMessage = null;
+         Message.prototype.commentMessage = null;
+@@ -36265,6 +36266,8 @@ export const proto = $root.proto = (() => {
+                 $root.proto.Message.BCallMessage.encode(m.bcallMessage, w.uint32(578).fork()).ldelim();
+             if (m.lottieStickerMessage != null && Object.hasOwnProperty.call(m, "lottieStickerMessage"))
+                 $root.proto.Message.FutureProofMessage.encode(m.lottieStickerMessage, w.uint32(594).fork()).ldelim();
++            if (m.audioStickerMessage != null && Object.hasOwnProperty.call(m, "audioStickerMessage"))
++                $root.proto.Message.FutureProofMessage.encode(m.audioStickerMessage, w.uint32(1074).fork()).ldelim();
+             if (m.eventMessage != null && Object.hasOwnProperty.call(m, "eventMessage"))
+                 $root.proto.Message.EventMessage.encode(m.eventMessage, w.uint32(602).fork()).ldelim();
+             if (m.encEventResponseMessage != null && Object.hasOwnProperty.call(m, "encEventResponseMessage"))
+@@ -36591,6 +36594,10 @@ export const proto = $root.proto = (() => {
+                         m.lottieStickerMessage = $root.proto.Message.FutureProofMessage.decode(r, r.uint32());
+                         break;
+                     }
++                case 134: {
++                        m.audioStickerMessage = $root.proto.Message.FutureProofMessage.decode(r, r.uint32());
++                        break;
++                    }
+                 case 75: {
+                         m.eventMessage = $root.proto.Message.EventMessage.decode(r, r.uint32());
+                         break;
+@@ -37043,6 +37050,11 @@ export const proto = $root.proto = (() => {
+                     throw TypeError(".proto.Message.lottieStickerMessage: object expected");
+                 m.lottieStickerMessage = $root.proto.Message.FutureProofMessage.fromObject(d.lottieStickerMessage);
+             }
++            if (d.audioStickerMessage != null) {
++                if (typeof d.audioStickerMessage !== "object")
++                    throw TypeError(".proto.Message.audioStickerMessage: object expected");
++                m.audioStickerMessage = $root.proto.Message.FutureProofMessage.fromObject(d.audioStickerMessage);
++            }
+             if (d.eventMessage != null) {
+                 if (typeof d.eventMessage !== "object")
+                     throw TypeError(".proto.Message.eventMessage: object expected");
+@@ -37525,6 +37537,9 @@ export const proto = $root.proto = (() => {
+                 if (o.oneofs)
+                     d._lottieStickerMessage = "lottieStickerMessage";
+             }
++            if (m.audioStickerMessage != null && m.hasOwnProperty("audioStickerMessage")) {
++                d.audioStickerMessage = $root.proto.Message.FutureProofMessage.toObject(m.audioStickerMessage, o);
++            }
+             if (m.eventMessage != null && m.hasOwnProperty("eventMessage")) {
+                 d.eventMessage = $root.proto.Message.EventMessage.toObject(m.eventMessage, o);
+                 if (o.oneofs)
+@@ -62624,6 +62639,7 @@ export const proto = $root.proto = (() => {
+             StickerMessage.prototype.isLottie = null;
+             StickerMessage.prototype.accessibilityLabel = null;
+             StickerMessage.prototype.mediaKeyDomain = null;
++            StickerMessage.prototype.audioMessage = null;
+ 
+             let $oneOfFields;
+ 
+@@ -62802,6 +62818,8 @@ export const proto = $root.proto = (() => {
+                     w.uint32(178).string(m.accessibilityLabel);
+                 if (m.mediaKeyDomain != null && Object.hasOwnProperty.call(m, "mediaKeyDomain"))
+                     w.uint32(184).int32(m.mediaKeyDomain);
++                if (m.audioMessage != null && Object.hasOwnProperty.call(m, "audioMessage"))
++                    $root.proto.Message.AudioMessage.encode(m.audioMessage, w.uint32(210).fork()).ldelim();
+                 return w;
+             };
+ 
+@@ -62898,6 +62916,10 @@ export const proto = $root.proto = (() => {
+                             m.mediaKeyDomain = r.int32();
+                             break;
+                         }
++                    case 26: {
++                            m.audioMessage = $root.proto.Message.AudioMessage.decode(r, r.uint32());
++                            break;
++                        }
+                     default:
+                         r.skipType(t & 7);
+                         break;
+@@ -63036,6 +63058,11 @@ export const proto = $root.proto = (() => {
+                     m.mediaKeyDomain = 4;
+                     break;
+                 }
++                if (d.audioMessage != null) {
++                    if (typeof d.audioMessage !== "object")
++                        throw TypeError(".proto.Message.StickerMessage.audioMessage: object expected");
++                    m.audioMessage = $root.proto.Message.AudioMessage.fromObject(d.audioMessage);
++                }
+                 return m;
+             };
+ 
+@@ -63157,6 +63184,9 @@ export const proto = $root.proto = (() => {
+                     if (o.oneofs)
+                         d._mediaKeyDomain = "mediaKeyDomain";
+                 }
++                if (m.audioMessage != null && m.hasOwnProperty("audioMessage")) {
++                    d.audioMessage = $root.proto.Message.AudioMessage.toObject(m.audioMessage, o);
++                }
+                 return d;
+             };
+ 
+diff --git a/node_modules/baileys/lib/Socket/messages-send.js b/node_modules/baileys/lib/Socket/messages-send.js
+index d61e064..c1a3201 100644
+--- a/node_modules/baileys/lib/Socket/messages-send.js
++++ b/node_modules/baileys/lib/Socket/messages-send.js
+@@ -904,6 +904,9 @@ export const makeMessagesSocket = (config) => {
+         return 'text';
+     };
+     const getMediaType = (message) => {
++        if (message.audioStickerMessage) {
++            return 'sticker';
++        }
+         if (message.imageMessage) {
+             return 'image';
+         }
+diff --git a/node_modules/baileys/lib/Utils/messages.js b/node_modules/baileys/lib/Utils/messages.js
+index 247b1f1..3353423 100644
+--- a/node_modules/baileys/lib/Utils/messages.js
++++ b/node_modules/baileys/lib/Utils/messages.js
+@@ -654,6 +654,7 @@ export const normalizeMessageContent = (content) => {
+             message?.documentWithCaptionMessage ||
+             message?.viewOnceMessageV2 ||
+             message?.viewOnceMessageV2Extension ||
++            message?.audioStickerMessage ||
+             message?.editedMessage ||
+             message?.associatedChildMessage ||
+             message?.groupStatusMessage ||

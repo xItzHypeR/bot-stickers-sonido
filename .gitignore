@@ -1,0 +1,7 @@
+node_modules/
+auth/
+*.log
+
+# Datos personales (números de owners, etc.)
+src/config.local.js
+.env

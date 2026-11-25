@@ -1,0 +1,26 @@
+{
+  "name": "bot-stickers-sonido",
+  "version": "1.0.0",
+  "description": "Bot personal de WhatsApp que crea stickers normales y stickers con sonido",
+  "type": "module",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "patch-package && node src/index.js",
+    "test": "patch-package && node test/run-tests.js",
+    "postinstall": "patch-package"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "node-webpmux": "3.2.1",
+    "patch-package": "8.0.1",
+    "pino": "10.4.0",
+    "qrcode-terminal": "0.12.0"
+  },
+  "devDependencies": {
+    "protobufjs": "7.6.6"
+  }
+}

@@ -1,0 +1,2 @@
+# Saltos de línea LF en todas partes (el parche de Baileys falla si se convierte a CRLF)
+* text=auto eol=lf
