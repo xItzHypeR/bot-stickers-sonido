@@ -41,11 +41,30 @@ Escríbelos tú mismo en cualquier chat. Lo más cómodo es usar tu chat contigo
 | `!s <link>` | Sticker animado (sin sonido) de un TikTok |
 | `!ss` respondiendo a una **imagen o sticker** | El bot te pide el audio: manda un audio, nota de voz o link de TikTok (usa su sonido) |
 | `!ss` respondiendo a un **audio** | El bot te pide la imagen, sticker o video |
-| `!ss 3` | Igual, pero el audio empieza en el segundo 3 |
-| `!s 1:1`, `!ss 1:1` | Fuerza el recorte cuadrado al centro (imagen, video o link). También vale `cuadrado`, y se combina: `!ss 3 1:1 <link>` |
+| `!expropiar Paquete\|Autor` | Responde a un sticker (con o sin sonido) → te lo devuelve con tu nombre de paquete y autor. Sin texto usa los de la configuración |
+| `!video <link>` | Descarga el video (TikTok, Instagram, X, YouTube…) y te lo manda |
+| `!mp3 <link>` | Descarga solo el audio en mp3 (también `!musica`) |
 | `!audio` | Responde a un sticker con sonido → te manda su audio |
 | `!info` | Responde a un mensaje → muestra cómo viene por dentro (sirve para depurar) |
 | `!cancelar` | Cancela un sticker con sonido a medias |
+
+### Opciones de `!s` y `!ss`
+
+Se escriben después del comando, en cualquier orden y combinadas: `!ss 3-8 ardilla redondo <link>`.
+
+| Opción | Qué hace |
+|---|---|
+| `3` | Empieza en el segundo 3 |
+| `3-8` | Usa del segundo 3 al 8 (también `1:05-1:10`) |
+| `1:1` (o `cuadrado`) | Recorte cuadrado al centro |
+| `redondo` | Sticker en círculo |
+| `grave` / `ardilla` | Voz más grave / más aguda (dura lo mismo) |
+| `eco` | Eco |
+| `bass` | Bajos a tope |
+| `reversa` | Al revés |
+| `rapido` / `lento` | 1,5× más rápido / más lento |
+
+`rapido`, `lento` y `reversa` también se aplican al video del sticker. Con `!s` solo cuentan las opciones de imagen y video (los efectos de sonido no aplican).
 
 El audio se recorta a 10 s y los stickers animados a 6 s (se cambia en [src/config.js](src/config.js)).
 

@@ -62,13 +62,13 @@ export function findUrl(text) {
 }
 
 /**
- * Descarga el video de un link.
+ * Descarga el video de un link (o solo el audio con audioOnly).
  * Devuelve { buffer, hasVideo, hasAudio } (un TikTok de fotos puede traer solo audio).
  */
-export async function downloadFromLink(url, { attempts = 3 } = {}) {
+export async function downloadFromLink(url, { attempts = 3, audioOnly = false } = {}) {
 	for (let i = 1; ; i++) {
 		try {
-			return await downloadOnce(url)
+			return await downloadOnce(url, audioOnly)
 		} catch (err) {
 			if (!err.retryable || i >= attempts) throw err
 			await new Promise((r) => setTimeout(r, 1500 * i))
@@ -76,14 +76,15 @@ export async function downloadFromLink(url, { attempts = 3 } = {}) {
 	}
 }
 
-async function downloadOnce(url) {
+async function downloadOnce(url, audioOnly) {
 	return withTempDir(async (dir) => {
 		await runYtDlp([
 			'--no-playlist', '--no-warnings', '--quiet', '--no-progress',
 			'--ies', 'default,-generic', // solo sitios conocidos, nada de links arbitrarios
 			'--max-filesize', `${MAX_MB}M`,
-			'-S', 'res:720,vcodec:h264,ext:mp4:m4a',
-			'--merge-output-format', 'mp4',
+			...(audioOnly
+				? ['-f', 'bestaudio/best']
+				: ['-S', 'res:720,vcodec:h264,ext:mp4:m4a', '--merge-output-format', 'mp4']),
 			...(process.env.FFMPEG_PATH ? ['--ffmpeg-location', process.env.FFMPEG_PATH] : []),
 			'-o', path.join(dir, 'video.%(ext)s'),
 			'--', url

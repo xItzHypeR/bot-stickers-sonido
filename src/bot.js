@@ -3,36 +3,45 @@ import { downloadContentFromMessage, getContentType, normalizeMessageContent } f
 import config from './config.js'
 import { downloadFromLink, findUrl } from './download.js'
 import { addStickerExif } from './exif.js'
-import { imageToSticker, isAnimatedWebp, probeBuffer, toStickerAudio, videoToSticker } from './media.js'
+import {
+	imageToSticker, isAnimatedWebp, probeBuffer, toMp3, toShareableVideo, toStickerAudio, videoToSticker
+} from './media.js'
+import { inputSeconds, parseOptions, plain } from './options.js'
 import { getSoundStickerParts, sendSoundSticker } from './soundSticker.js'
 
 const MAX_MESSAGE_AGE_S = 120
 const VISUAL_KINDS = new Set(['image', 'video', 'sticker'])
 
-// Stickers con sonido a medias, por chat y persona: { visual?, audio?, start, expires }
+// Stickers con sonido a medias, por chat y persona: { visual?, audio?, ...opciones, expires }
 const pending = new Map()
 
+const p = config.prefix
 const MENU = `*🤖 Bot de stickers*
 
-*${config.prefix}s* — sticker normal
-  Responde a una imagen, video, GIF o *link de TikTok* con ${config.prefix}s (o mándalo con ${config.prefix}s de texto).
+*${p}s* — sticker normal
+  Responde a una imagen, video, GIF o *link* con ${p}s (o mándalo con ${p}s de texto).
 
-*${config.prefix}ss* — sticker con sonido 🔊
-  • Responde a un *video* con ${config.prefix}ss → sticker animado con el audio del video.
-  • Responde a un *link de TikTok* con ${config.prefix}ss, o escribe ${config.prefix}ss <link>.
-  • Responde a una *imagen o sticker* con ${config.prefix}ss y luego manda el *audio, nota de voz o link*.
-  • O al revés: responde a un *audio* con ${config.prefix}ss y luego manda la imagen.
-  • ${config.prefix}ss 3 → el audio empieza en el segundo 3.
+*${p}ss* — sticker con sonido 🔊
+  • Responde a un *video* con ${p}ss → sticker animado con el audio del video.
+  • Responde a un *link* con ${p}ss, o escribe ${p}ss <link>.
+  • Responde a una *imagen o sticker* con ${p}ss y luego manda el *audio, nota de voz o link*.
+  • O al revés: responde a un *audio* con ${p}ss y luego manda la imagen.
   Máximo ${config.maxAudioSeconds} s de audio.
-  Los links también pueden ser de Instagram, YouTube Shorts, X, etc.
 
-*1:1* — agrégalo a ${config.prefix}s o ${config.prefix}ss para recortar cuadrado al centro
-  Ej.: ${config.prefix}s 1:1 · ${config.prefix}ss 1:1 <link> · ${config.prefix}ss 3 1:1
-  (también sirve escribir *cuadrado*)
+*Opciones* para ${p}s y ${p}ss (en cualquier orden):
+  • *3* → empieza en el segundo 3
+  • *3-8* → del segundo 3 al 8 (también *1:05-1:10*)
+  • *1:1* → recorte cuadrado · *redondo* → en círculo
+  • Efectos: *grave*, *ardilla*, *eco*, *reversa*, *rapido*, *lento*, *bass*
+    (rapido, lento y reversa también mueven el video)
+  Ej.: ${p}ss 3-8 ardilla redondo <link>
 
-*${config.prefix}audio* — responde a un sticker con sonido para sacar su audio
-*${config.prefix}info* — responde a un mensaje para ver cómo viene por dentro
-*${config.prefix}cancelar* — cancela un sticker con sonido a medias`
+*${p}expropiar Paquete|Autor* — responde a un sticker para ponerle tu nombre de paquete y autor
+*${p}video <link>* — descarga el video (TikTok, Instagram, X, YouTube…)
+*${p}mp3 <link>* — descarga solo el audio
+*${p}audio* — responde a un sticker con sonido para sacar su audio
+*${p}info* — responde a un mensaje para ver cómo viene por dentro
+*${p}cancelar* — cancela un sticker con sonido a medias`
 
 export function createBot(sock, { log, rememberSent, isSentByBot }) {
 	sock.ev.on('messages.upsert', ({ messages, type }) => {
@@ -66,8 +75,10 @@ export function createBot(sock, { log, rememberSent, isSentByBot }) {
 			return
 		}
 
-		const [rawCmd, ...args] = text.slice(config.prefix.length).trim().split(/\s+/)
-		const cmd = (rawCmd || '').toLowerCase()
+		const body = text.slice(config.prefix.length).trim()
+		const [rawCmd, ...args] = body.split(/\s+/)
+		const rest = body.slice((rawCmd || '').length).trim() // todo lo que va después del comando
+		const cmd = plain(rawCmd || '')
 		const quoted = getQuoted(content)
 
 		try {
@@ -83,6 +94,16 @@ export function createBot(sock, { log, rememberSent, isSentByBot }) {
 				case 'sonido':
 				case 'stickersonido':
 					return await cmdSoundSticker(m, chat, key, content, quoted, args)
+				case 'expropiar':
+					return await cmdExpropriate(m, chat, quoted, rest)
+				case 'video':
+				case 'descargar':
+				case 'mp4':
+					return await cmdDownload(m, chat, quoted, args, 'video')
+				case 'mp3':
+				case 'musica':
+				case 'cancion':
+					return await cmdDownload(m, chat, quoted, args, 'mp3')
 				case 'audio':
 					return await cmdExtractAudio(m, chat, quoted)
 				case 'info':
@@ -108,8 +129,8 @@ export function createBot(sock, { log, rememberSent, isSentByBot }) {
 		if (!media && !url) {
 			return reply(chat, `Responde a una imagen, video, GIF o link de TikTok con *${config.prefix}s*.`)
 		}
+		const opts = parseOptions(args)
 		await react(m, '⏳')
-		const squareCrop = parseSquare(args)
 		let buffer
 		if (url) {
 			const dl = await downloadFromLink(url)
@@ -119,27 +140,39 @@ export function createBot(sock, { log, rememberSent, isSentByBot }) {
 		} else {
 			buffer = await download(media)
 		}
-		let webp
-		let animated
-		if (media.kind === 'sticker') {
-			webp = buffer // re-envía el sticker (sin sonido)
-			animated = isAnimatedWebp(buffer)
-		} else if (media.kind === 'image') {
-			webp = await addExif(await imageToSticker(buffer, { square: squareCrop === 'always' }))
-			animated = false
-		} else {
-			webp = await addExif(await videoToSticker(buffer, { maxSeconds: config.maxVideoSeconds, squareCrop }))
-			animated = true
-		}
+		const { webp, animated } = await makeWebp({ kind: media.kind, buffer }, opts)
 		rememberSent(await sock.sendMessage(chat, { sticker: webp, isAnimated: animated }))
 		await react(m, '✅')
 	}
 
+	/** Imagen, video o sticker -> webp del sticker, con las opciones (rango, 1:1, redondo, velocidad...). */
+	async function makeWebp({ kind, buffer }, opts) {
+		if (kind === 'sticker') {
+			const animated = isAnimatedWebp(buffer)
+			// Un sticker estático se puede volver a recortar; uno animado se usa tal cual
+			if (!animated && (opts.square || opts.circle)) {
+				return { webp: await addExif(await imageToSticker(buffer, opts)), animated: false }
+			}
+			return { webp: buffer, animated }
+		}
+		if (kind === 'image') {
+			return { webp: await addExif(await imageToSticker(buffer, opts)), animated: false }
+		}
+		const webp = await videoToSticker(buffer, {
+			start: opts.start,
+			maxSeconds: inputSeconds(opts, config.maxVideoSeconds),
+			squareCrop: opts.square ? 'always' : config.squareCrop,
+			circle: opts.circle,
+			speed: opts.speed,
+			reverse: opts.reverse
+		})
+		return { webp: await addExif(webp), animated: true }
+	}
+
 	// ---------- !ss ----------
 	async function cmdSoundSticker(m, chat, key, content, quoted, args) {
-		const start = parseStart(args)
 		const sources = [findMedia(content), findMedia(quoted)].filter(Boolean)
-		const job = { start, squareCrop: parseSquare(args), expires: Date.now() + config.pendingTimeoutMs }
+		const job = { ...parseOptions(args), expires: Date.now() + config.pendingTimeoutMs }
 
 		const visualSrc = sources.find((s) => VISUAL_KINDS.has(s.kind))
 		const audioSrc = sources.find((s) => s.kind === 'audio')
@@ -218,28 +251,76 @@ export function createBot(sock, { log, rememberSent, isSentByBot }) {
 		else throw new Error(job.visual ? 'Ese link no trae audio.' : 'Ese link no trae video.')
 	}
 
-	async function buildAndSend(m, chat, { visual, audio, start, squareCrop }) {
+	async function buildAndSend(m, chat, job) {
+		const { visual, audio } = job
 		await react(m, '⏳')
-		let webp
-		let animated
-		if (visual.kind === 'sticker') {
-			webp = visual.buffer
-			animated = isAnimatedWebp(webp)
-		} else if (visual.kind === 'image') {
-			webp = await addExif(await imageToSticker(visual.buffer, { square: squareCrop === 'always' }))
-			animated = false
-		} else {
-			webp = await addExif(await videoToSticker(visual.buffer, { start, maxSeconds: config.maxVideoSeconds, squareCrop }))
-			animated = true
-		}
+		const { webp, animated } = await makeWebp(visual, job)
 
 		// Si el audio sale del mismo video, que dure lo mismo que la animación
-		const maxSeconds = audio.fromVideo ? Math.min(config.maxVideoSeconds, config.maxAudioSeconds) : config.maxAudioSeconds
-		const sound = await toStickerAudio(audio.buffer, { start, maxSeconds, format: config.audioFormat })
+		const maxOutput = audio.fromVideo ? Math.min(config.maxVideoSeconds, config.maxAudioSeconds) : config.maxAudioSeconds
+		const sound = await toStickerAudio(audio.buffer, {
+			start: job.start,
+			maxSeconds: inputSeconds(job, maxOutput),
+			maxOutputSeconds: maxOutput,
+			format: config.audioFormat,
+			effects: job.effects
+		})
 
 		rememberSent(await sendSoundSticker(sock, chat, { webp, animated, audio: sound }))
 		await react(m, '✅')
-		log.info(`Sticker con sonido enviado (${animated ? 'animado' : 'estático'}, ${sound.seconds} s de audio)`)
+		const extras = [job.circle && 'redondo', job.square && '1:1', ...job.effects].filter(Boolean)
+		log.info(`Sticker con sonido enviado (${animated ? 'animado' : 'estático'}, ${sound.seconds} s de audio` +
+			`${extras.length ? `, ${extras.join(' ')}` : ''})`)
+	}
+
+	// ---------- !expropiar ----------
+	async function cmdExpropriate(m, chat, quoted, rest) {
+		const media = findMedia(quoted)
+		if (media?.kind !== 'sticker') {
+			return reply(chat, `Responde a un sticker con *${p}expropiar Paquete|Autor*.`)
+		}
+		const [pack, author] = rest.split('|').map((s) => s.trim().slice(0, 60))
+		const meta = { packName: pack || config.packName, author: author || config.author }
+		await react(m, '⏳')
+		const original = await download(media)
+		let webp
+		try {
+			webp = await addStickerExif(original, meta)
+		} catch {
+			throw new Error('Ese sticker no se puede editar (no es un webp normal).')
+		}
+		const animated = isAnimatedWebp(original)
+		const parts = getSoundStickerParts(quoted)
+		if (parts) {
+			// Sticker con sonido: se reenvía con el mismo audio
+			const audio = {
+				buffer: await download({ node: parts.audio, dl: 'audio' }),
+				seconds: parts.audio.seconds || 1,
+				mimetype: parts.audio.mimetype || 'audio/ogg; codecs=opus'
+			}
+			rememberSent(await sendSoundSticker(sock, chat, { webp, animated, audio }))
+		} else {
+			rememberSent(await sock.sendMessage(chat, { sticker: webp, isAnimated: animated }))
+		}
+		await react(m, '✅')
+	}
+
+	// ---------- !video / !mp3 ----------
+	async function cmdDownload(m, chat, quoted, args, kind) {
+		const url = linkFrom(args, quoted)
+		if (!url) return reply(chat, `Escribe *${p}${kind} <link>* o responde a un link con *${p}${kind}*.`)
+		await react(m, '⏳')
+		if (kind === 'video') {
+			const dl = await downloadFromLink(url)
+			if (!dl.hasVideo) throw new Error(`Ese link no trae video. Prueba con ${p}mp3.`)
+			rememberSent(await sock.sendMessage(chat, { video: await toShareableVideo(dl.buffer), mimetype: 'video/mp4' }))
+		} else {
+			const dl = await downloadFromLink(url, { audioOnly: true })
+			if (!dl.hasAudio) throw new Error('Ese link no trae audio.')
+			const mp3 = await toMp3(dl.buffer)
+			rememberSent(await sock.sendMessage(chat, { audio: mp3.buffer, mimetype: 'audio/mpeg', seconds: mp3.seconds }))
+		}
+		await react(m, '✅')
 	}
 
 	// ---------- !audio ----------
@@ -296,18 +377,6 @@ function isOwner(key) {
 // Cada persona tiene su propio sticker a medias, aunque estén en el mismo grupo
 function pendingKey(m) {
 	return `${m.key.remoteJid}|${m.key.fromMe ? 'yo' : m.key.participant || m.key.remoteJid}`
-}
-
-/** "3" o "1,5" en los argumentos = segundo donde empieza el audio */
-function parseStart(args) {
-	const arg = args.find((a) => /^\d+([.,]\d+)?$/.test(a))
-	return arg ? parseFloat(arg.replace(',', '.')) : 0
-}
-
-/** "1:1" o "cuadrado" en los argumentos = forzar recorte cuadrado; si no, lo de config.squareCrop */
-const SQUARE_ARGS = new Set(['1:1', '1x1', 'cuadrado', 'cuadro'])
-function parseSquare(args) {
-	return args.some((a) => SQUARE_ARGS.has(a.toLowerCase())) ? 'always' : config.squareCrop
 }
 
 /** Link escrito después del comando o en el mensaje al que se responde */

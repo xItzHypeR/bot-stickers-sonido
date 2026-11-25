@@ -2,14 +2,18 @@
 //   npm test
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { generateWAMessageFromContent, normalizeMessageContent, proto } from 'baileys'
 import protobuf from 'protobufjs'
 import WebP from 'node-webpmux'
 import { addStickerExif } from '../src/exif.js'
-import { cropFilter, detectBlackBars, imageToSticker, isAnimatedWebp, probe, probeBuffer, toStickerAudio, videoToSticker } from '../src/media.js'
+import {
+	AUDIO_EFFECTS, cropFilter, detectBlackBars, imageToSticker, isAnimatedWebp, probe, probeBuffer,
+	toMp3, toShareableVideo, toStickerAudio, videoToSticker
+} from '../src/media.js'
+import { inputSeconds, parseOptions } from '../src/options.js'
 import { getSoundStickerParts } from '../src/soundSticker.js'
 
 let failed = 0
@@ -229,6 +233,155 @@ await test('forzar 1:1: imagen y video sin bordes quedan cuadrados, sin fondo tr
 	const vidAlways = await firstFrameRGBA(await videoToSticker(fixture('video.mp4'), { maxSeconds: 2, squareCrop: 'always' }))
 	assert.equal(pixel(vidAuto, 256, 5)[3], 0, 'en auto un video sin bordes no se recorta')
 	assert.equal(pixel(vidAlways, 256, 5)[3], 255, 'con 1:1 el video debería llenar el cuadro')
+})
+
+// ---------- opciones (!ss 3-8 ardilla redondo...) ----------
+await test('opciones: inicio, rango, 1:1, redondo y efectos', () => {
+	let o = parseOptions(['3'])
+	assert.equal(o.start, 3)
+	assert.equal(o.duration, null)
+	o = parseOptions(['3-8', 'Ardilla', 'REDONDO', 'https://www.tiktok.com/@a/video/1'])
+	assert.deepEqual([o.start, o.duration, o.circle, o.square], [3, 5, true, false])
+	assert.deepEqual(o.effects, ['ardilla'])
+	o = parseOptions(['1:05-1:10,5'])
+	assert.equal(o.start, 65)
+	assert.equal(o.duration, 5.5)
+	o = parseOptions(['1:1']) // es el recorte cuadrado, no un tiempo
+	assert.deepEqual([o.square, o.start], [true, 0])
+	o = parseOptions(['bass', 'rápido', 'reversa', 'eco'])
+	assert.deepEqual(o.effects, ['reversa', 'rapido', 'eco', 'bass'])
+	assert.equal(o.speed, 1.5)
+	assert.equal(o.reverse, true)
+	assert.throws(() => parseOptions(['8-3']), /mayor que el inicio/)
+	assert.throws(() => parseOptions(['rapido', 'lento']), /rápido y lento/)
+	// cuánto se lee del original
+	assert.equal(inputSeconds(parseOptions([]), 6), 6)
+	assert.equal(inputSeconds(parseOptions(['rapido']), 6), 9) // 9 s acelerados = 6 s
+	assert.equal(inputSeconds(parseOptions(['3-5']), 6), 2)
+	assert.equal(inputSeconds(parseOptions(['0-30']), 10), 10)
+})
+
+// ---------- redondo ----------
+await test('redondo: imagen, video y sticker estático quedan en círculo', async () => {
+	const alpha = (img, x, y) => pixel(img, x, y)[3]
+	const check = (img, what) => {
+		assert.equal(alpha(img, 3, 3), 0, `${what}: la esquina debería ser transparente`)
+		assert.equal(alpha(img, 508, 508), 0, `${what}: la esquina debería ser transparente`)
+		assert.equal(alpha(img, 256, 256), 255, `${what}: el centro debería verse`)
+		assert.equal(alpha(img, 6, 256), 255, `${what}: el borde del círculo debería verse`)
+	}
+	const img = await imageToSticker(fixture('img.png'), { circle: true })
+	check(await firstFrameRGBA(img), 'imagen')
+	check(await firstFrameRGBA(await videoToSticker(fixture('letterbox.mp4'), { maxSeconds: 2, circle: true })), 'video')
+	// un sticker estático (con exif) se puede volver a recortar
+	const sticker = await addStickerExif(await imageToSticker(fixture('img.png')), { packName: 'P', author: 'A' })
+	check(await firstFrameRGBA(await imageToSticker(sticker, { circle: true })), 'sticker')
+})
+
+// ---------- efectos de sonido ----------
+ff('-f', 'lavfi', '-i', 'sine=frequency=440:duration=4', '-c:a', 'libmp3lame', path.join(tmp, 'la440.mp3'))
+
+/** Frecuencia aproximada contando cruces por cero */
+function frequency(audioBuffer) {
+	const file = path.join(tmp, 'freq-in')
+	writeFileSync(file, audioBuffer)
+	const pcm = execFileSync('ffmpeg', ['-loglevel', 'error', '-i', file, '-f', 's16le', '-ac', '1', '-ar', '48000', '-'], { maxBuffer: 64 * 1024 * 1024 })
+	const samples = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length / 2)
+	// se ignoran los bordes (el códec mete un poco de silencio)
+	const from = 4800
+	const to = samples.length - 4800
+	let crossings = 0
+	for (let i = from + 1; i < to; i++) if ((samples[i - 1] < 0) !== (samples[i] < 0)) crossings++
+	return crossings / 2 / ((to - from) / 48000)
+}
+
+await test('efectos: grave y ardilla cambian el tono sin cambiar la duración', async () => {
+	const normal = await toStickerAudio(fixture('la440.mp3'), { maxSeconds: 4 })
+	const grave = await toStickerAudio(fixture('la440.mp3'), { maxSeconds: 4, effects: ['grave'] })
+	const ardilla = await toStickerAudio(fixture('la440.mp3'), { maxSeconds: 4, effects: ['ardilla'] })
+	const f0 = frequency(normal.buffer)
+	assert.ok(Math.abs(f0 - 440) < 15, `normal: ${f0.toFixed(0)} Hz`)
+	assert.ok(Math.abs(frequency(grave.buffer) - 330) < 20, `grave: ${frequency(grave.buffer).toFixed(0)} Hz (se esperaba ~330)`)
+	assert.ok(Math.abs(frequency(ardilla.buffer) - 660) < 25, `ardilla: ${frequency(ardilla.buffer).toFixed(0)} Hz (se esperaba ~660)`)
+	assert.equal(grave.seconds, 4)
+	assert.equal(ardilla.seconds, 4)
+})
+
+await test('efectos: rápido acorta, lento alarga y todos funcionan juntos', async () => {
+	const rapido = await toStickerAudio(fixture('audio.mp3'), { maxSeconds: 9, effects: ['rapido'] })
+	assert.equal(rapido.seconds, 6)
+	const lento = await toStickerAudio(fixture('audio.mp3'), { maxSeconds: 3, effects: ['lento'] })
+	assert.equal(lento.seconds, 4)
+	for (const name of Object.keys(AUDIO_EFFECTS)) {
+		const a = await toStickerAudio(fixture('video.mp4'), { maxSeconds: 3, effects: [name] })
+		assert.equal(a.buffer.toString('ascii', 0, 4), 'OggS', name)
+	}
+	// 6 s acelerados = 4 s (+ medio segundo de cola del eco)
+	const all = await toStickerAudio(fixture('video.mp4'), { maxSeconds: 6, effects: ['reversa', 'rapido', 'ardilla', 'eco', 'bass'] })
+	assert.ok(all.seconds === 4 || all.seconds === 5, `duró ${all.seconds} s`)
+	// con tope, la cola del eco no se pasa del límite
+	const capped = await toStickerAudio(fixture('audio.mp3'), { maxSeconds: 10, maxOutputSeconds: 10, effects: ['eco'] })
+	assert.equal(capped.seconds, 10)
+	assert.ok((await probeBuffer(capped.buffer)).duration <= 10.05)
+})
+
+await test('video: rápido acorta la animación, reversa la invierte', async () => {
+	const totalMs = async (webp) => {
+		const img = new WebP.Image()
+		await img.load(webp)
+		return img.frames.reduce((s, f) => s + f.delay, 0)
+	}
+	const normal = await videoToSticker(fixture('video.mp4'), { maxSeconds: 3 })
+	const rapido = await videoToSticker(fixture('video.mp4'), { maxSeconds: 3, speed: 1.5 })
+	assert.ok(Math.abs((await totalMs(normal)) - 3000) < 150, `normal dura ${await totalMs(normal)} ms`)
+	assert.ok(Math.abs((await totalMs(rapido)) - 2000) < 150, `rápido dura ${await totalMs(rapido)} ms`)
+	// al revés: el primer cuadro se parece al último del normal
+	const reversed = await videoToSticker(fixture('video.mp4'), { maxSeconds: 3, reverse: true })
+	const img = new WebP.Image()
+	await img.load(normal)
+	const lastNormal = { width: 512, data: await img.getFrameData(img.frames.length - 1) }
+	const firstNormal = { width: 512, data: await img.getFrameData(0) }
+	const firstReversed = await firstFrameRGBA(reversed)
+	const diff = (a, b) => {
+		let sum = 0
+		for (let i = 0; i < a.data.length; i += 4 * 97) sum += Math.abs(a.data[i] - b.data[i])
+		return sum
+	}
+	assert.ok(diff(firstReversed, lastNormal) < diff(firstReversed, firstNormal), 'el video al revés no empieza por el final')
+})
+
+// ---------- !expropiar ----------
+await test('expropiar: cambia paquete y autor de un sticker que ya tenía', async () => {
+	const animated = await addStickerExif(await videoToSticker(fixture('video.mp4'), { maxSeconds: 2 }), { packName: 'Ajeno', author: 'Otro' })
+	const mine = await addStickerExif(animated, { packName: 'Mío', author: 'HypeR' })
+	const img = new WebP.Image()
+	await img.load(mine)
+	const exif = img.exif.toString('utf8')
+	assert.ok(exif.includes('"sticker-pack-name":"Mío"') && exif.includes('"sticker-pack-publisher":"HypeR"'), exif)
+	assert.ok(!exif.includes('Ajeno'))
+	assert.ok(isAnimatedWebp(mine), 'dejó de ser animado')
+})
+
+// ---------- !video / !mp3 ----------
+ff('-f', 'lavfi', '-i', 'testsrc2=size=480x270:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=330',
+	'-t', '3', '-c:v', 'libvpx-vp9', '-b:v', '300k', '-c:a', 'libopus', '-shortest', path.join(tmp, 'clip.webm'))
+
+await test('video: un mp4 H.264 se manda tal cual; un webm se convierte a mp4 H.264', async () => {
+	const mp4 = fixture('video.mp4')
+	assert.equal(await toShareableVideo(mp4), mp4)
+	const converted = await toShareableVideo(fixture('clip.webm'))
+	const info = await probeBuffer(converted)
+	assert.equal(info.videoCodec, 'h264')
+	assert.equal(info.audioCodec, 'aac')
+	assert.ok(info.format.includes('mp4'))
+})
+
+await test('mp3: audio de un video', async () => {
+	const mp3 = await toMp3(fixture('clip.webm'))
+	const info = await probeBuffer(mp3.buffer)
+	assert.equal(info.audioCodec, 'mp3')
+	assert.equal(info.hasVideo, false)
+	assert.equal(mp3.seconds, 3)
 })
 
 rmSync(tmp, { recursive: true, force: true })
