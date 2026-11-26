@@ -2,9 +2,10 @@
 import { downloadContentFromMessage, getContentType, normalizeMessageContent } from 'baileys'
 import config from './config.js'
 import { downloadFromLink, findUrl } from './download.js'
-import { addStickerExif } from './exif.js'
+import { addStickerExif, copyExif } from './exif.js'
 import {
-	imageToSticker, isAnimatedWebp, probeBuffer, toMp3, toShareableVideo, toStickerAudio, videoToSticker
+	imageToSticker, isAnimatedWebp, probeBuffer, retimeAnimatedSticker, toMp3, toShareableVideo, toStickerAudio,
+	videoToSticker
 } from './media.js'
 import { inputSeconds, parseOptions, plain } from './options.js'
 import { getSoundStickerParts, sendSoundSticker } from './soundSticker.js'
@@ -34,7 +35,7 @@ const MENU = `*🤖 Bot de stickers*
   • *3-8* → del segundo 3 al 8 (también *1:05-1:10*)
   • *1:1* → recorte cuadrado · *redondo* → en círculo
   • Efectos: *grave*, *ardilla*, *eco*, *reversa*, *rapido*, *lento*, *bass*
-    (rapido, lento y reversa también mueven el video)
+    (rapido, lento y reversa también mueven el video o el sticker animado)
   Ej.: ${p}ss 3-8 ardilla redondo <link>
 
 *${p}expropiar Paquete|Autor* — responde a un sticker para ponerle tu nombre de paquete y autor
@@ -176,9 +177,14 @@ export function createBot(sock, { log, rememberSent, isSentByBot, getSent = () =
 	async function makeWebp({ kind, buffer }, opts) {
 		if (kind === 'sticker') {
 			const animated = isAnimatedWebp(buffer)
-			// Un sticker estático se puede volver a recortar; uno animado se usa tal cual
+			// Un sticker estático se puede volver a recortar
 			if (!animated && (opts.square || opts.circle)) {
 				return { webp: await addExif(await imageToSticker(buffer, opts)), animated: false }
+			}
+			// Uno animado se puede poner al revés, más rápido o más lento (conserva paquete y autor)
+			if (animated && (opts.reverse || opts.speed !== 1)) {
+				const retimed = await retimeAnimatedSticker(buffer, { speed: opts.speed, reverse: opts.reverse })
+				return { webp: await copyExif(buffer, retimed), animated: true }
 			}
 			return { webp: buffer, animated }
 		}

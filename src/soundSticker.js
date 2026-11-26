@@ -12,6 +12,7 @@
 // Baileys todavía no conoce esos campos; los agrega el parche de
 // patches/baileys+7.0.0-rc14.patch (se aplica solo con `npm install`).
 import { generateWAMessageFromContent, prepareWAMessageMedia } from 'baileys'
+import { withUniqueId } from './exif.js'
 
 /**
  * @param {import('baileys').WASocket} sock
@@ -20,10 +21,12 @@ import { generateWAMessageFromContent, prepareWAMessageMedia } from 'baileys'
  */
 export async function sendSoundSticker(sock, jid, { webp, animated, audio, quoted }) {
 	const opts = { upload: sock.waUploadToServer }
+	// Archivo único: si no, el iPhone puede tocar el sonido de otro sticker con la misma imagen
+	const sticker = await withUniqueId(webp)
 
 	// Se suben por separado: el webp como sticker y el sonido como audio
 	const [{ stickerMessage }, { audioMessage }] = await Promise.all([
-		prepareWAMessageMedia({ sticker: webp, mimetype: 'image/webp', isAnimated: animated }, opts),
+		prepareWAMessageMedia({ sticker, mimetype: 'image/webp', isAnimated: animated }, opts),
 		prepareWAMessageMedia({ audio: audio.buffer, mimetype: audio.mimetype, seconds: audio.seconds, ptt: false }, opts)
 	])
 

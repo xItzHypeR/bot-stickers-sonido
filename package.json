@@ -18,7 +18,8 @@
     "node-webpmux": "3.2.1",
     "patch-package": "8.0.1",
     "pino": "10.4.0",
-    "qrcode-terminal": "0.12.0"
+    "qrcode-terminal": "0.12.0",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "protobufjs": "7.6.6"

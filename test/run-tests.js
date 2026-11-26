@@ -8,10 +8,11 @@ import path from 'node:path'
 import { generateWAMessageFromContent, normalizeMessageContent, proto } from 'baileys'
 import protobuf from 'protobufjs'
 import WebP from 'node-webpmux'
-import { addStickerExif } from '../src/exif.js'
+import sharp from 'sharp'
+import { addStickerExif, copyExif, withUniqueId } from '../src/exif.js'
 import {
 	AUDIO_EFFECTS, cropFilter, detectBlackBars, imageToSticker, isAnimatedWebp, probe, probeBuffer,
-	toMp3, toShareableVideo, toStickerAudio, videoToSticker
+	retimeAnimatedSticker, toMp3, toShareableVideo, toStickerAudio, videoToSticker
 } from '../src/media.js'
 import { inputSeconds, parseOptions } from '../src/options.js'
 import { getSoundStickerParts } from '../src/soundSticker.js'
@@ -348,6 +349,53 @@ await test('video: rápido acorta la animación, reversa la invierte', async () 
 		return sum
 	}
 	assert.ok(diff(firstReversed, lastNormal) < diff(firstReversed, firstNormal), 'el video al revés no empieza por el final')
+})
+
+await test('sticker animado: reversa lo invierte y rápido lo acorta, conservando paquete y autor', async () => {
+	// Cuadros completos (ya armados) y duración de cada uno
+	const frames = async (webp) => {
+		const meta = await sharp(webp, { animated: true }).metadata()
+		const { data } = await sharp(webp, { animated: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+		const size = meta.width * meta.pageHeight * 4
+		return { count: meta.pages, delay: meta.delay, at: (i) => data.subarray(i * size, (i + 1) * size) }
+	}
+	const diff = (a, b) => {
+		let sum = 0
+		for (let i = 0; i < a.length; i += 4 * 37) sum += Math.abs(a[i] - b[i])
+		return sum
+	}
+	const total = (f) => f.delay.reduce((s, d) => s + d, 0)
+	const sticker = await addStickerExif(await videoToSticker(fixture('video.mp4'), { maxSeconds: 3 }), { packName: 'Ajeno', author: 'Otro' })
+	const reversed = await copyExif(sticker, await retimeAnimatedSticker(sticker, { reverse: true }))
+	assert.ok(isAnimatedWebp(reversed) && reversed.length <= 500 * 1024, `${reversed.length} bytes`)
+	const a = await frames(sticker)
+	const r = await frames(reversed)
+	assert.equal(r.count, a.count)
+	assert.ok(Math.abs(total(r) - total(a)) < 50, `${total(r)} vs ${total(a)} ms`)
+	const last = a.count - 1
+	assert.ok(diff(r.at(0), a.at(last)) < diff(r.at(0), a.at(0)), 'no empieza por el final')
+	assert.ok(diff(r.at(last), a.at(0)) < diff(r.at(last), a.at(last)), 'no termina por el principio')
+	const img = new WebP.Image()
+	await img.load(reversed)
+	assert.ok(img.exif.toString('utf8').includes('"sticker-pack-name":"Ajeno"'), 'perdió el paquete')
+
+	const fast = await frames(await retimeAnimatedSticker(sticker, { speed: 1.5 }))
+	assert.ok(Math.abs(total(fast) - total(a) / 1.5) < 100, `rápido dura ${total(fast)} ms`)
+})
+
+await test('sticker con sonido: cada envío es un archivo distinto con el mismo paquete', async () => {
+	const sticker = await addStickerExif(await imageToSticker(fixture('img.png')), { packName: 'Ajeno', author: 'Otro' })
+	const one = await withUniqueId(sticker)
+	const two = await withUniqueId(sticker)
+	assert.ok(!one.equals(two), 'salieron iguales')
+	for (const webp of [one, two]) {
+		const img = new WebP.Image()
+		await img.load(webp)
+		const exif = img.exif.toString('utf8')
+		assert.ok(exif.includes('"sticker-pack-name":"Ajeno"') && exif.includes('"bot-sticker-id"'), exif)
+	}
+	// Un webp sin metadatos también sirve
+	assert.ok(!(await withUniqueId(await imageToSticker(fixture('img.png')))).equals(await imageToSticker(fixture('img.png'))))
 })
 
 // ---------- !expropiar ----------

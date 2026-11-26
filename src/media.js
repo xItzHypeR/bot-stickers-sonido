@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import sharp from 'sharp'
 
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
 const FFPROBE = process.env.FFPROBE_PATH || 'ffprobe'
@@ -204,6 +205,36 @@ export async function videoToSticker(buffer, {
 		}
 		return best
 	})
+}
+
+/**
+ * Sticker animado (webp) -> el mismo sticker al revés y/o más rápido o lento.
+ * ffmpeg no siempre sabe leer webp animados, así que los cuadros se sacan con sharp (libwebp),
+ * ya armados (los webp animados suelen guardar solo lo que cambia de un cuadro al otro).
+ * No conserva los metadatos (exif).
+ */
+export async function retimeAnimatedSticker(buffer, { speed = 1, reverse = false } = {}) {
+	const meta = await sharp(buffer, { animated: true }).metadata()
+	const pages = meta.pages || 1
+	const { data, info } = await sharp(buffer, { animated: true }).ensureAlpha().raw()
+		.toBuffer({ resolveWithObject: true })
+	const height = meta.pageHeight || info.height / pages
+	const frameBytes = info.width * height * 4
+
+	const order = [...Array(pages).keys()]
+	if (reverse) order.reverse()
+	const frames = Buffer.concat(order.map((i) => data.subarray(i * frameBytes, (i + 1) * frameBytes)))
+	// Cada cuadro conserva su duración (dividida por la velocidad); menos de 20 ms no se respeta
+	const delays = order.map((i) => Math.max(20, Math.round((meta.delay?.[i] ?? 100) / speed)))
+
+	let best
+	for (const quality of [75, 60, 45, 30, 20]) {
+		best = await sharp(frames, { raw: { width: info.width, height: height * pages, channels: 4, pageHeight: height } })
+			.webp({ quality, effort: 4, loop: meta.loop ?? 0, delay: delays })
+			.toBuffer()
+		if (best.length <= ANIMATED_MAX_BYTES) break
+	}
+	return best
 }
 
 /**
