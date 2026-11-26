@@ -20,7 +20,8 @@ const config = {
 	// WhatsApp permite hasta ~10 s de audio en stickers con sonido.
 	maxAudioSeconds: 10,
 	// Duración máxima de los stickers animados (de videos/GIF).
-	maxVideoSeconds: 6,
+	// WhatsApp permite hasta 10 s; si el video pesa mucho se baja la fluidez o se acorta.
+	maxVideoSeconds: 10,
 
 	// Recorte de los stickers de video (TikToks, videos, GIFs):
 	//  'auto'   -> si el video tiene bordes negros, los quita y lo deja cuadrado (1:1)

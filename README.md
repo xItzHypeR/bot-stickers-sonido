@@ -67,7 +67,7 @@ Se escriben después del comando, en cualquier orden y combinadas: `!ss 3-8 ardi
 
 `rapido`, `lento` y `reversa` también se aplican al video del sticker, o a la animación si respondes a un sticker animado (por ejemplo, `!ss reversa` a un sticker con sonido lo pone todo al revés: imagen y sonido). Con `!s` solo cuentan las opciones de imagen y video (los efectos de sonido no aplican).
 
-El audio se recorta a 10 s y los stickers animados a 6 s (se cambia en [src/config.js](src/config.js)).
+El audio y los stickers animados se recortan a 10 s (se cambia en [src/config.js](src/config.js)).
 
 Si un video (por ejemplo un TikTok) tiene bordes negros arriba/abajo o a los lados, el bot los detecta, los quita y deja el sticker cuadrado (1:1). Los textos que estén dentro del borde negro se conservan. Con `squareCrop` en la configuración puedes hacer que recorte siempre a 1:1 (`'always'`) o nunca (`'never'`). Para forzarlo en un solo sticker, agrega `1:1` al comando.
 

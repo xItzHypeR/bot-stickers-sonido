@@ -115,6 +115,9 @@ ff('-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '6',
 // Video vertical dentro de un cuadro horizontal (bordes a los lados)
 ff('-f', 'lavfi', '-i', 'testsrc2=size=360x640:rate=30', '-t', '3',
 	'-vf', 'pad=1280:720:460:40:black', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(tmp, 'pillarbox.mp4'))
+// Video vertical de 12 s con mucho grano (difícil de comprimir)
+ff('-f', 'lavfi', '-i', 'testsrc2=size=720x1280:rate=30', '-t', '12', '-vf', 'noise=alls=18:allf=t',
+	'-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(tmp, 'grain.mp4'))
 
 async function firstFrameRGBA(webp) {
 	await WebP.Image.initLib()
@@ -139,6 +142,15 @@ await test('video -> sticker animado <= 500 KB', async () => {
 	const webp = await videoToSticker(fixture('video.mp4'), { maxSeconds: 6 })
 	assert.ok(isAnimatedWebp(webp), 'no es animado')
 	assert.ok(webp.length <= 500 * 1024, `pesa ${webp.length} bytes`)
+})
+
+await test('video con mucho grano -> sticker de 10 s completos <= 500 KB', async () => {
+	const webp = await videoToSticker(fixture('grain.mp4'), { maxSeconds: 10 })
+	assert.ok(webp.length <= 500 * 1024, `pesa ${webp.length} bytes`)
+	const img = new WebP.Image()
+	await img.load(webp)
+	const ms = img.frames.reduce((s, f) => s + f.delay, 0)
+	assert.ok(Math.abs(ms - 10000) < 300, `dura ${ms} ms`)
 })
 
 await test('audio mp3 de 15 s -> opus recortado a 10 s', async () => {

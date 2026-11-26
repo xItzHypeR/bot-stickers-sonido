@@ -170,7 +170,7 @@ export function cropFilter(box, square) {
  * speed: 1.5 = más rápido, 0.75 = más lento. reverse: al revés.
  */
 export async function videoToSticker(buffer, {
-	start = 0, maxSeconds = 6, squareCrop = 'auto', circle = false, speed = 1, reverse = false
+	start = 0, maxSeconds = 10, squareCrop = 'auto', circle = false, speed = 1, reverse = false
 } = {}) {
 	return withTempDir(async (dir) => {
 		const input = path.join(dir, 'input')
@@ -188,7 +188,11 @@ export async function videoToSticker(buffer, {
 			{ fps: 12, quality: 45 },
 			{ fps: 10, quality: 35 },
 			{ fps: 8, quality: 25 },
-			{ fps: 8, quality: 15, seconds: Math.min(maxSeconds, 4) }
+			{ fps: 8, quality: 15 },
+			{ fps: 6, quality: 10 },
+			// Último recurso: más corto
+			{ fps: 6, quality: 10, seconds: Math.min(maxSeconds, 6) },
+			{ fps: 6, quality: 10, seconds: Math.min(maxSeconds, 4) }
 		]
 		for (const [i, a] of attempts.entries()) {
 			const output = path.join(dir, `out-${i}.webp`)
