@@ -10,7 +10,8 @@ const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
 const FFPROBE = process.env.FFPROBE_PATH || 'ffprobe'
 
 const STATIC_MAX_BYTES = 100 * 1024 // límite de WhatsApp para stickers estáticos
-const ANIMATED_MAX_BYTES = 500 * 1024 // límite de WhatsApp para stickers animados
+// La guía de WhatsApp pide 500 KB, pero acepta stickers animados más pesados (se vieron de 806 KB)
+const ANIMATED_MAX_BYTES = 1024 * 1024
 
 export const AUDIO_FORMATS = {
 	opus: { mimetype: 'audio/ogg; codecs=opus', ext: 'ogg', args: ['-c:a', 'libopus', '-b:a', '64k', '-f', 'ogg'] },
@@ -170,7 +171,7 @@ export function cropFilter(box, square) {
  * speed: 1.5 = más rápido, 0.75 = más lento. reverse: al revés.
  */
 export async function videoToSticker(buffer, {
-	start = 0, maxSeconds = 10, squareCrop = 'auto', circle = false, speed = 1, reverse = false
+	start = 0, maxSeconds = 15, squareCrop = 'auto', circle = false, speed = 1, reverse = false
 } = {}) {
 	return withTempDir(async (dir) => {
 		const input = path.join(dir, 'input')
@@ -190,14 +191,13 @@ export async function videoToSticker(buffer, {
 			{ fps: 8, quality: 25 },
 			{ fps: 8, quality: 15 },
 			{ fps: 6, quality: 10 },
-			// Último recurso: más corto
-			{ fps: 6, quality: 10, seconds: Math.min(maxSeconds, 6) },
-			{ fps: 6, quality: 10, seconds: Math.min(maxSeconds, 4) }
+			// Último recurso: más corto (de 15 s quedan 10 y después 6)
+			{ fps: 6, quality: 10, cut: 2 / 3 },
+			{ fps: 6, quality: 10, cut: 0.4 }
 		]
 		for (const [i, a] of attempts.entries()) {
 			const output = path.join(dir, `out-${i}.webp`)
-			// a.seconds limita lo que dura el sticker; con speed se lee más o menos del original
-			const seconds = a.seconds ? Math.min(maxSeconds, a.seconds * speed) : maxSeconds
+			const seconds = maxSeconds * (a.cut ?? 1)
 			await run(FFMPEG, [
 				'-y', '-ss', String(start), '-t', String(seconds), '-i', input,
 				...stickerFilter(`${pts}fps=${a.fps},${crop}`, { circle, tail: reverse ? 'reverse' : '' }), '-an',
@@ -253,7 +253,10 @@ export const AUDIO_EFFECTS = {
 	grave: { filter: 'asetrate=36000,aresample=48000,atempo=1.3333' },
 	ardilla: { filter: 'asetrate=72000,aresample=48000,atempo=0.6667' },
 	eco: { filter: 'aecho=0.8:0.85:250|500:0.45|0.25' },
-	bass: { filter: 'bass=g=18:f=90:w=0.6,volume=2,alimiter=limit=0.9' }
+	bass: { filter: 'bass=g=18:f=90:w=0.6,volume=2,alimiter=limit=0.9' },
+	// Sonido de consola vieja: menos bits y menos muestras, sin suavizar (por eso chirría).
+	// Va último en la lista para que se aplique al final, después de los demás efectos.
+	'8bit': { filter: 'acrusher=bits=6:mode=log:aa=0:samples=6:mix=1,highpass=f=120,alimiter=limit=0.9' }
 }
 
 /**

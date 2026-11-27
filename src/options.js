@@ -3,7 +3,7 @@
 //   3-8        -> del segundo 3 al 8 (también 1:05-1:10)
 //   1:1        -> recorte cuadrado (también "cuadrado")
 //   redondo    -> sticker en círculo
-//   grave, ardilla, eco, reversa, rapido, lento, bass -> efectos
+//   grave, ardilla, eco, reversa, rapido, lento, bass, 8bit -> efectos
 import { AUDIO_EFFECTS } from './media.js'
 
 const SQUARE = new Set(['1:1', '1x1', 'cuadrado', 'cuadro'])
@@ -15,7 +15,8 @@ const EFFECT_ALIASES = {
 	reversa: 'reversa', reverso: 'reversa', alreves: 'reversa', reverse: 'reversa',
 	rapido: 'rapido', fast: 'rapido',
 	lento: 'lento', slow: 'lento',
-	bass: 'bass', bajo: 'bass', bajos: 'bass', bassboost: 'bass'
+	bass: 'bass', bajo: 'bass', bajos: 'bass', bassboost: 'bass',
+	'8bit': '8bit', '8bits': '8bit', retro: '8bit', gameboy: '8bit'
 }
 
 // 3 · 2.5 · 2,5 · 1:05 (mm:ss; "1:1" no cuenta porque los segundos llevan dos cifras)
@@ -75,4 +76,16 @@ export function parseOptions(args) {
  */
 export function inputSeconds(opts, maxOutput) {
 	return Math.min(opts.duration ?? Infinity, maxOutput * opts.speed)
+}
+
+/**
+ * Cuánto puede durar el sonido del sticker.
+ * audio.fromVideo: sale del mismo video, así que dura lo mismo que la animación.
+ * audio.ownSeconds: es el propio sonido de un sticker (al ponerle efectos); no se acorta,
+ * porque WhatsApp ya lo aceptó así de largo.
+ */
+export function maxSoundSeconds(audio, opts, { maxAudioSeconds, maxVideoSeconds }) {
+	if (audio.fromVideo) return Math.min(maxVideoSeconds, maxAudioSeconds)
+	if (audio.ownSeconds) return Math.max(maxAudioSeconds, audio.ownSeconds / opts.speed)
+	return maxAudioSeconds
 }

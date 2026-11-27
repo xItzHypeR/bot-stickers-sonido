@@ -14,8 +14,9 @@ import {
 	AUDIO_EFFECTS, cropFilter, detectBlackBars, imageToSticker, isAnimatedWebp, probe, probeBuffer,
 	retimeAnimatedSticker, toMp3, toShareableVideo, toStickerAudio, videoToSticker
 } from '../src/media.js'
-import { inputSeconds, parseOptions } from '../src/options.js'
+import { inputSeconds, maxSoundSeconds, parseOptions } from '../src/options.js'
 import { getSoundStickerParts } from '../src/soundSticker.js'
+import { isNetworkError, networkReason, retryOnNetworkError } from '../src/retry.js'
 
 let failed = 0
 async function test(name, fn) {
@@ -115,8 +116,8 @@ ff('-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '6',
 // Video vertical dentro de un cuadro horizontal (bordes a los lados)
 ff('-f', 'lavfi', '-i', 'testsrc2=size=360x640:rate=30', '-t', '3',
 	'-vf', 'pad=1280:720:460:40:black', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(tmp, 'pillarbox.mp4'))
-// Video vertical de 12 s con mucho grano (difícil de comprimir)
-ff('-f', 'lavfi', '-i', 'testsrc2=size=720x1280:rate=30', '-t', '12', '-vf', 'noise=alls=18:allf=t',
+// Video vertical de 16 s con mucho grano (difícil de comprimir)
+ff('-f', 'lavfi', '-i', 'testsrc2=size=720x1280:rate=30', '-t', '16', '-vf', 'noise=alls=18:allf=t',
 	'-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(tmp, 'grain.mp4'))
 
 async function firstFrameRGBA(webp) {
@@ -138,19 +139,19 @@ await test('imagen -> sticker estático 512x512 <= 100 KB', async () => {
 	assert.equal(img.height, 512)
 })
 
-await test('video -> sticker animado <= 500 KB', async () => {
+await test('video -> sticker animado <= 1 MB', async () => {
 	const webp = await videoToSticker(fixture('video.mp4'), { maxSeconds: 6 })
 	assert.ok(isAnimatedWebp(webp), 'no es animado')
-	assert.ok(webp.length <= 500 * 1024, `pesa ${webp.length} bytes`)
+	assert.ok(webp.length <= 1024 * 1024, `pesa ${webp.length} bytes`)
 })
 
-await test('video con mucho grano -> sticker de 10 s completos <= 500 KB', async () => {
-	const webp = await videoToSticker(fixture('grain.mp4'), { maxSeconds: 10 })
-	assert.ok(webp.length <= 500 * 1024, `pesa ${webp.length} bytes`)
+await test('video con mucho grano -> sticker de 15 s completos <= 1 MB', async () => {
+	const webp = await videoToSticker(fixture('grain.mp4'), { maxSeconds: 15 })
+	assert.ok(webp.length <= 1024 * 1024, `pesa ${webp.length} bytes`)
 	const img = new WebP.Image()
 	await img.load(webp)
 	const ms = img.frames.reduce((s, f) => s + f.delay, 0)
-	assert.ok(Math.abs(ms - 10000) < 300, `dura ${ms} ms`)
+	assert.ok(Math.abs(ms - 15000) < 300, `dura ${ms} ms`)
 })
 
 await test('audio mp3 de 15 s -> opus recortado a 10 s', async () => {
@@ -336,6 +337,64 @@ await test('efectos: rápido acorta, lento alarga y todos funcionan juntos', asy
 	const capped = await toStickerAudio(fixture('audio.mp3'), { maxSeconds: 10, maxOutputSeconds: 10, effects: ['eco'] })
 	assert.equal(capped.seconds, 10)
 	assert.ok((await probeBuffer(capped.buffer)).duration <= 10.05)
+})
+
+await test('efectos sobre el propio sonido de un sticker de 15 s: no lo acortan a 10 s', async () => {
+	ff('-f', 'lavfi', '-i', 'sine=frequency=500', '-t', '15', '-c:a', 'libopus', path.join(tmp, 'own15.ogg'))
+	const limits = { maxAudioSeconds: 10, maxVideoSeconds: 10 }
+	const own = { buffer: fixture('own15.ogg'), ownSeconds: 15 }
+	const length = async (args) => {
+		const job = parseOptions(args)
+		const max = maxSoundSeconds(own, job, limits)
+		const a = await toStickerAudio(own.buffer, { maxSeconds: inputSeconds(job, max), maxOutputSeconds: max, effects: job.effects })
+		return (await probeBuffer(a.buffer)).duration
+	}
+	for (const [args, expected] of [[['ardilla'], 15], [['rapido'], 10], [['lento'], 20]]) {
+		const got = await length(args)
+		assert.ok(Math.abs(got - expected) < 0.15, `${args} dura ${got} s (esperaba ${expected})`)
+	}
+	// Un audio nuevo sí se recorta al límite; el de un video, a lo que dura la animación
+	assert.equal(maxSoundSeconds({}, parseOptions([]), limits), 10)
+	assert.equal(maxSoundSeconds({ fromVideo: true }, parseOptions([]), { maxAudioSeconds: 10, maxVideoSeconds: 6 }), 6)
+})
+
+await test('red: reintenta las fallas de conexión, no los demás errores, y dice la causa', async () => {
+	const netErr = () => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) })
+	let calls = 0
+	const ok = await retryOnNetworkError(async () => { if (++calls < 3) throw netErr(); return 'listo' }, { delayMs: 1 })
+	assert.deepEqual([ok, calls], ['listo', 3])
+	calls = 0
+	await assert.rejects(retryOnNetworkError(async () => { calls++; throw netErr() }, { attempts: 2, delayMs: 1 }), /fetch failed/)
+	assert.equal(calls, 2)
+	calls = 0
+	await assert.rejects(retryOnNetworkError(async () => { calls++; throw new Error('403 Forbidden') }, { delayMs: 1 }), /403/)
+	assert.equal(calls, 1, 'un error que no es de red no se reintenta')
+	assert.equal(networkReason(netErr()), 'ECONNRESET')
+	assert.ok(isNetworkError(netErr()))
+})
+
+await test('8bit: le mete el chirrido de consola vieja y va al final', async () => {
+	// Energía de los cambios bruscos entre muestras, comparada con la del sonido
+	const harshness = (audioBuffer) => {
+		const file = path.join(tmp, 'harsh-in')
+		writeFileSync(file, audioBuffer)
+		const pcm = execFileSync('ffmpeg', ['-loglevel', 'error', '-i', file, '-f', 's16le', '-ac', '1', '-ar', '48000', '-'], { maxBuffer: 64 * 1024 * 1024 })
+		const s = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length / 2)
+		let diff = 0
+		let energy = 0
+		for (let i = 4801; i < s.length - 4800; i++) {
+			diff += (s[i] - s[i - 1]) ** 2
+			energy += s[i] ** 2
+		}
+		return diff / energy
+	}
+	const sound = async (effects) => toStickerAudio(fixture('la440.mp3'), { maxSeconds: 4, effects })
+	const normal = harshness((await sound([])).buffer)
+	const retro = await sound(['8bit'])
+	assert.ok(harshness(retro.buffer) > 3 * normal, `8bit: ${harshness(retro.buffer)} vs normal ${normal}`)
+	assert.equal(retro.seconds, 4)
+	assert.deepEqual(parseOptions(['8bit', 'Eco', 'grave']).effects, ['grave', 'eco', '8bit'])
+	assert.deepEqual(parseOptions(['retro']).effects, ['8bit'])
 })
 
 await test('video: rápido acorta la animación, reversa la invierte', async () => {

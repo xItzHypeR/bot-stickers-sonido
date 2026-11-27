@@ -7,7 +7,8 @@ import {
 	imageToSticker, isAnimatedWebp, probeBuffer, retimeAnimatedSticker, toMp3, toShareableVideo, toStickerAudio,
 	videoToSticker
 } from './media.js'
-import { inputSeconds, parseOptions, plain } from './options.js'
+import { inputSeconds, maxSoundSeconds, parseOptions, plain } from './options.js'
+import { isNetworkError, networkReason, retryOnNetworkError } from './retry.js'
 import { getSoundStickerParts, sendSoundSticker } from './soundSticker.js'
 
 const MAX_MESSAGE_AGE_S = 120
@@ -34,7 +35,7 @@ const MENU = `*🤖 Bot de stickers*
   • *3* → empieza en el segundo 3
   • *3-8* → del segundo 3 al 8 (también *1:05-1:10*)
   • *1:1* → recorte cuadrado · *redondo* → en círculo
-  • Efectos: *grave*, *ardilla*, *eco*, *reversa*, *rapido*, *lento*, *bass*
+  • Efectos: *grave*, *ardilla*, *eco*, *reversa*, *rapido*, *lento*, *bass*, *8bit*
     (rapido, lento y reversa también mueven el video o el sticker animado)
   Ej.: ${p}ss 3-8 ardilla redondo <link>
 
@@ -135,7 +136,7 @@ export function createBot(sock, { log, rememberSent, isSentByBot, getSent = () =
 				case 'audio':
 					return await cmdExtractAudio(m, chat, quoted)
 				case 'info':
-					return await cmdInfo(chat, quoted ? getQuotedRaw(content) : m.message)
+					return await cmdInfo(chat, quoted ? getQuotedRaw(content) : m.message, quoted || content)
 				case 'cancelar':
 					pending.delete(key)
 					return await reply(chat, '❎ Cancelado.')
@@ -225,7 +226,10 @@ export function createBot(sock, { log, rememberSent, isSentByBot, getSent = () =
 		await react(m, '⏳')
 		if (visualSrc) job.visual = { kind: visualSrc.kind, buffer: await download(visualSrc) }
 		if (audioSrc) job.audio = { buffer: await download(audioSrc) }
-		if (reuseOwnSound) job.audio = { buffer: await download({ node: ownParts.audio, dl: 'audio' }) }
+		if (reuseOwnSound) {
+			const buffer = await download({ node: ownParts.audio, dl: 'audio' })
+			job.audio = { buffer, ownSeconds: (await probeBuffer(buffer)).duration }
+		}
 		if (url) await addLinkToJob(job, url)
 
 		// Un video con audio sirve para las dos cosas
@@ -301,8 +305,7 @@ export function createBot(sock, { log, rememberSent, isSentByBot, getSent = () =
 		await react(m, '⏳')
 		const { webp, animated } = await makeWebp(visual, job)
 
-		// Si el audio sale del mismo video, que dure lo mismo que la animación
-		const maxOutput = audio.fromVideo ? Math.min(config.maxVideoSeconds, config.maxAudioSeconds) : config.maxAudioSeconds
+		const maxOutput = maxSoundSeconds(audio, job, config)
 		const sound = await toStickerAudio(audio.buffer, {
 			start: job.start,
 			maxSeconds: inputSeconds(job, maxOutput),
@@ -384,10 +387,10 @@ export function createBot(sock, { log, rememberSent, isSentByBot, getSent = () =
 	}
 
 	// ---------- !info ----------
-	async function cmdInfo(chat, rawMessage) {
+	// content: el mensaje ya resuelto (si es un sticker que el bot vio, el original con su audio)
+	async function cmdInfo(chat, rawMessage, content) {
 		if (!rawMessage) return reply(chat, 'No hay nada que mostrar.')
 		log.info({ message: rawMessage }, 'Contenido del mensaje (!info)')
-		const content = normalizeMessageContent(rawMessage)
 		const parts = getSoundStickerParts(content)
 		let summary = `Tipo: *${getContentType(rawMessage)}*`
 		if (parts) {
@@ -396,6 +399,7 @@ export function createBot(sock, { log, rememberSent, isSentByBot, getSent = () =
 				`\n• Audio: ${parts.audio.mimetype} · ${parts.audio.seconds ?? '?'} s · ptt=${!!parts.audio.ptt}` +
 				`\n• Sticker: ${parts.sticker.mimetype} · animado=${!!parts.sticker.isAnimated}`
 		}
+		if (!parts && content?.stickerMessage && unverified.has(content)) summary += `\n\nℹ️ ${SOUND_HINT}`
 		const json = JSON.stringify(rawMessage, hideNoise, 1)
 		const body = json.length > 3000 ? json.slice(0, 3000) + '\n…(recortado, completo en la consola)' : json
 		await reply(chat, `${summary}\n\n\`\`\`${body}\`\`\``)
@@ -490,10 +494,19 @@ function findMedia(content) {
 }
 
 async function download({ node, dl }) {
-	const stream = await downloadContentFromMessage(node, dl)
-	const chunks = []
-	for await (const chunk of stream) chunks.push(chunk)
-	return Buffer.concat(chunks)
+	try {
+		// La conexión con los servidores de WhatsApp a veces se corta: se reintenta
+		return await retryOnNetworkError(async () => {
+			const stream = await downloadContentFromMessage(node, dl)
+			const chunks = []
+			for await (const chunk of stream) chunks.push(chunk)
+			return Buffer.concat(chunks)
+		})
+	} catch (err) {
+		if (!isNetworkError(err)) throw err
+		const reason = networkReason(err)
+		throw new Error(`la descarga desde WhatsApp falló por la conexión${reason ? ` (${reason})` : ''}. Prueba otra vez.`, { cause: err })
+	}
 }
 
 const NOISY_KEYS = new Set([

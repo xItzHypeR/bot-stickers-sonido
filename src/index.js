@@ -17,8 +17,11 @@ const log = Object.fromEntries(['info', 'warn', 'error'].map((level) => [level, 
 	const [data, msg] = typeof args[0] === 'string' ? [undefined, args[0]] : args
 	const out = level === 'info' ? console.log : console[level]
 	out(`[${new Date().toLocaleTimeString()}] ${msg ?? ''}`)
-	if (data?.err) out(data.err.stack || data.err)
-	else if (data) out(JSON.stringify(data, null, 2))
+	if (data?.err) {
+		out(data.err.stack || data.err)
+		// fetch y otros guardan el motivo real (ECONNRESET, timeout...) en err.cause
+		for (let cause = data.err.cause; cause; cause = cause.cause) out('Causa:', cause.stack || cause)
+	} else if (data) out(JSON.stringify(data, null, 2))
 }]))
 // Baileys es muy hablador; solo mostramos sus errores
 const baileysLog = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'error' })
